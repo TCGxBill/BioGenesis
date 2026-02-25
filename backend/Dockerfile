@@ -1,22 +1,22 @@
 FROM python:3.11-slim
 
+# HuggingFace Spaces metadata
+LABEL maintainer="TCGxBill"
+
 WORKDIR /app
 
-# Install system deps for BioPython / torch
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for layer caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend source
 COPY . .
 
-# Expose port
-EXPOSE 8000
+# HuggingFace Spaces requires port 7860
+# Render uses PORT env var (defaults to 8000)
+EXPOSE 7860
 
-# Start server
 CMD ["python", "server.py"]
