@@ -1,0 +1,80 @@
+project:
+  name: "binding_site_prediction_optimized"
+  description: "Optimized for AUC>0.8 AND F1/Precision>0.6"
+  random_seed: 42
+  device: "cpu"
+
+data:
+  dataset: "combined"
+  data_dir: "./data"
+  processed_dir: "./data/processed/combined"
+  cache_dir: "./data/cache"
+  
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  
+  distance_threshold: 8.0
+  k_neighbors: 15
+  
+  node_features:
+    - "amino_acid_type"
+    - "secondary_structure"
+    - "surface_accessibility"
+    - "hydrophobicity"
+    - "charge"
+    - "polarity"
+    - "geometric_angle"
+    - "geometric_dihedral"
+  
+  edge_features:
+    - "distance"
+    - "distance_bins"
+    - "angle"
+    - "dihedral"
+
+model:
+  type: "gcn_geometric"
+  input_dim: 29
+  hidden_dims: [256, 128, 64]  # Larger model for higher capacity
+  output_dim: 1
+  num_layers: 3
+  dropout: 0.15              # Lower dropout for more capacity
+  batch_norm: true
+  use_attention: true
+  attention_heads: 4         # Divisible into hidden dims
+  use_geometric: true
+  geometric_dim: 32
+  distance_bins: 16
+
+training:
+  batch_size: 32
+  num_epochs: 40            # Extended training to improve F1
+
+  optimizer: "adam"
+  learning_rate: 0.0008     # Balanced learning rate
+  weight_decay: 0.00005
+  
+  scheduler: "reduce_on_plateau"
+  patience: 8
+  factor: 0.5
+  
+  # Combined Loss: BCE for AUC + Dice for F1
+  loss_fn: "combined"
+  bce_weight: 0.3           # 30% BCE (for AUC)
+  dice_weight: 0.7          # 70% Dice (for F1)
+  pos_weight: 12.0          # Moderate class weighting
+  
+  early_stopping: true
+  early_stopping_patience: 12
+  save_best: true
+  save_frequency: 5
+
+paths:
+  checkpoint_dir: "./checkpoints_optimized"
+  results_dir: "./results_optimized"
+
+logging:
+  use_tensorboard: true
+  tensorboard_dir: "./runs_optimized"
+  log_interval: 10

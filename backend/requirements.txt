@@ -1,0 +1,28 @@
+# Core Deep Learning
+torch>=2.0.0
+torch-geometric>=2.3.0
+
+# Scientific Computing
+numpy>=1.24.0
+scipy>=1.10.0
+pandas>=2.0.0
+
+# Biology & Chemistry
+biopython>=1.81
+
+# Machine Learning
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Utilities
+pyyaml>=6.0
+tqdm>=4.65.0
+
+# Optional (for development)
+# pytest>=7.4.0
+# tensorboard>=2.13.0fastapi>=0.100.0
+uvicorn>=0.20.0
+python-multipart>=0.0.6

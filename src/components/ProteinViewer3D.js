@@ -135,12 +135,70 @@ export function renderProteinViewer3D(seq) {
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;" id="structure-stats"></div>
         </div>
 
+        <!-- GGNN2025 AI Prediction -->
+        <div id="ai-predict-section" style="margin-top:16px;display:none;">
+          <div style="background:var(--bg-tertiary);border:1px solid rgba(139,92,246,0.3);border-radius:var(--radius-md);overflow:hidden;">
+            <div style="padding:12px 16px;background:rgba(139,92,246,0.1);display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <h3 style="margin:0;font-size:13px;color:var(--accent-purple);font-weight:600;display:flex;align-items:center;gap:6px;">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
+                  GGNN2025 Binding Predictor
+                </h3>
+                <p style="margin:4px 0 0 0;font-size:11px;color:var(--text-muted);">Predict Ligand-Binding Sites via SOTA Geometric GNN</p>
+              </div>
+              <button id="btn-predict-ggnn" class="btn btn-primary" style="background:var(--accent-purple);border-color:var(--accent-purple);font-size:11px;padding:6px 12px;display:flex;align-items:center;gap:4px;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                Run Prediction
+              </button>
+            </div>
+
+            <!-- Prediction Options -->
+            <div style="padding:10px 16px;border-top:1px solid rgba(139,92,246,0.1);background:rgba(139,92,246,0.04);display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
+              <!-- Threshold Slider -->
+              <div style="display:flex;flex-direction:column;gap:4px;min-width:180px;flex:1;">
+                <label style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Confidence Threshold: <span id="thresh-display" style="color:var(--accent-purple);font-weight:700;">0.50</span></label>
+                <input type="range" id="binding-threshold" min="0.20" max="0.95" step="0.05" value="0.40"
+                  style="width:100%;accent-color:var(--accent-purple);cursor:pointer;" />
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);">
+                  <span>0.20 (very sensitive)</span>
+                  <span>0.95 (strict)</span>
+                </div>
+              </div>
+              <!-- Top-N Selector -->
+              <div style="display:flex;flex-direction:column;gap:4px;">
+                <label style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Show Top</label>
+                <select id="binding-topn" style="padding:5px 8px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:var(--radius-sm);color:var(--text-primary);font-size:12px;">
+                  <option value="10">10 sites</option>
+                  <option value="25" selected>25 sites</option>
+                  <option value="50">50 sites</option>
+                  <option value="100">100 sites</option>
+                  <option value="0">All</option>
+                </select>
+              </div>
+              <!-- Color Mode -->
+              <div style="display:flex;flex-direction:column;gap:4px;">
+                <label style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Color Mode</label>
+                <select id="binding-colormode" style="padding:5px 8px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:var(--radius-sm);color:var(--text-primary);font-size:12px;">
+                  <option value="heatmap" selected>Heatmap (confidence)</option>
+                  <option value="flat">Flat red</option>
+                  <option value="pocket">Pocket clusters</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="ggnn-results" style="padding:12px 16px;font-size:12px;display:none;border-top:1px solid rgba(139,92,246,0.1);color:var(--text-secondary);">
+              <!-- Results go here -->
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   `;
 }
 
 let currentViewer = null;
+let currentPdbData = null;
 let isSpinning = false;
 let hasSurface = false;
 let currentSource = 'pdb'; // 'pdb' or 'alphafold'
@@ -183,6 +241,100 @@ export function bindProteinViewerEvents(seq) {
     pdbTab.style.color = 'var(--text-secondary)';
     if (pdbSection) pdbSection.style.display = 'none';
     if (afSection) afSection.style.display = '';
+  });
+
+  // GGNN2025 AI Prediction Binding
+  const predictBtn = document.getElementById('btn-predict-ggnn');
+  const ggnnResults = document.getElementById('ggnn-results');
+  const threshSlider = document.getElementById('binding-threshold');
+  const threshDisplay = document.getElementById('thresh-display');
+  const topNSelect = document.getElementById('binding-topn');
+  const colorModeSelect = document.getElementById('binding-colormode');
+
+  // Live threshold display
+  threshSlider?.addEventListener('input', () => {
+    if (threshDisplay) threshDisplay.textContent = parseFloat(threshSlider.value).toFixed(2);
+  });
+
+  predictBtn?.addEventListener('click', async () => {
+    if (!currentViewer || !currentPdbData) return;
+
+    const threshold = parseFloat(threshSlider?.value || '0.40');
+    const topN = parseInt(topNSelect?.value || '25');
+    const colorMode = colorModeSelect?.value || 'heatmap';
+
+    predictBtn.disabled = true;
+    predictBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Predicting...';
+    ggnnResults.style.display = 'block';
+    ggnnResults.innerHTML = `<span style="color:var(--text-muted);display:flex;align-items:center;gap:6px;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite;"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+      Running GGNN2025 — threshold: ${threshold.toFixed(2)}, top-${topN === 0 ? 'all' : topN}...
+    </span>`;
+
+    try {
+      const formData = new FormData();
+      formData.append('pdb_data', currentPdbData);
+      formData.append('threshold', threshold.toString());
+      formData.append('top_n', topN.toString());
+
+      const res = await fetch('http://localhost:8000/predict', {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || 'Prediction failed');
+      }
+
+      if (data.binding_sites && data.binding_sites.length > 0) {
+        let sites = data.binding_sites;
+        // Client-side filter by threshold (in case backend ignores the param)
+        sites = sites.filter(s => (s.probability ?? s.score ?? 1.0) >= threshold);
+        // Limit top-N
+        if (topN > 0) sites = sites.slice(0, topN);
+
+        const total = sites.length;
+
+        // Residue tags — colored by confidence
+        const residueListHtml = sites.map(site => {
+          const prob = site.probability ?? site.score ?? 1.0;
+          const pct = Math.max(0, Math.min(1, (prob - threshold) / (1 - threshold)));
+          const tagColor = confidenceColor(pct);
+          return `<span title="Confidence: ${(prob * 100).toFixed(1)}%" style="display:inline-flex;align-items:center;background:${tagColor}22;color:${tagColor};padding:2px 6px;border-radius:4px;font-family:monospace;font-size:11px;border:1px solid ${tagColor}55;">${site.resn} ${site.resi} <span style="opacity:0.7;margin-left:4px;font-size:10px;">${(prob * 100).toFixed(0)}%</span></span>`;
+        }).join('');
+
+        ggnnResults.innerHTML = `
+          <div style="margin-bottom:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <span style="color:#10b981;font-weight:500;">✓ ${total} binding residues</span>
+            <span style="color:var(--text-muted);font-size:11px;">of ${data.total_residues} total — threshold: ${threshold.toFixed(2)}</span>
+            <div style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-muted);">
+              <span style="width:10px;height:10px;border-radius:2px;background:#fbbf24;display:inline-block;"></span>low
+              <span style="width:10px;height:10px;border-radius:2px;background:#f97316;display:inline-block;margin-left:4px;"></span>med
+              <span style="width:10px;height:10px;border-radius:2px;background:#ef4444;display:inline-block;margin-left:4px;"></span>high
+            </div>
+          </div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:6px;text-transform:uppercase;font-weight:600;letter-spacing:0.5px;">Predicted Residues:</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;max-height:120px;overflow-y:auto;padding-right:4px;">${residueListHtml}</div>
+        `;
+
+        // Visualize on 3D viewer
+        highlightBindingSites(sites, colorMode, threshold);
+
+      } else {
+        const tip = threshold > 0.6
+          ? `<br/><span style="color:var(--accent-purple);font-size:11px;">→ Try lowering threshold to ${(threshold - 0.15).toFixed(2)} to find more sites</span>`
+          : '';
+        ggnnResults.innerHTML = `No binding sites found at threshold ${threshold.toFixed(2)}.${tip}`;
+      }
+
+    } catch (err) {
+      ggnnResults.innerHTML = `<span style="color:#ef4444;"><b>Error:</b> ${err.message}.<br/><br/><i>Make sure the backend is running: <code>python backend/server.py</code></i></span>`;
+    } finally {
+      predictBtn.disabled = false;
+      predictBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg> Run Prediction';
+    }
   });
 
   // Gallery buttons
@@ -252,8 +404,10 @@ export function bindProteinViewerEvents(seq) {
       hasSurface = !hasSurface;
       if (hasSurface) {
         currentViewer.addSurface($3Dmol.SurfaceType.VDW, {
-          opacity: 0.7, color: 'white',
-          colorscheme: { prop: 'b', gradient: 'rwb' }
+          opacity: 0.65,
+          color: 'white',
+          colorscheme: { prop: 'b', gradient: 'rwb' },
+          smooth: true
         });
       } else {
         currentViewer.removeAllSurfaces();
@@ -265,13 +419,32 @@ export function bindProteinViewerEvents(seq) {
   });
 
   // Auto-load: PDB ID takes priority, then try AlphaFold with accession/uniprotId
+  const uniprotRegex = /^[A-NR-Z][0-9][A-Z0-9]{3}[0-9]|^[O,P,Q][0-9][A-Z0-9]{3}[0-9]/i;
+
   if (seq?.pdbId) {
     setTimeout(() => loadStructure(seq.pdbId, 'pdb'), 100);
-  } else if (seq?.type === 'protein' && (seq?.uniprotId || seq?.accession)) {
+  } else if (seq?.type === 'protein' && (seq?.uniprotId || (seq?.accession && uniprotRegex.test(seq.accession)))) {
     const afId = seq.uniprotId || seq.accession;
     if (afInput) afInput.value = afId;
     afTab?.click();
     setTimeout(() => loadStructure(afId, 'alphafold'), 100);
+  } else if (seq?.type === 'protein' && seq?.accession) {
+    // If it's an NCBI RefSeq accession, it won't work in Alphafold
+    if (afInput) afInput.value = ''; // Don't pre-fill with invalid ID
+    afTab?.click();
+    const loadingEl = document.getElementById('viewer-3d-loading');
+    if (loadingEl) {
+      loadingEl.innerHTML = `
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="1.5" opacity="0.4">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+          </svg>
+          <p style="color:var(--text-secondary);font-size:13px;margin-top:8px;">Sequence <b>${seq.accession}</b> is not a UniProt ID.</p>
+          <p style="color:var(--text-muted);font-size:11px;text-align:center;max-width:320px;margin-top:4px;">
+            AlphaFold DB requires a <b>UniProt Accession</b> (e.g., P04637). Please find the equivalent UniProt ID and enter it above to load the AI prediction.
+          </p>
+        `;
+      loadingEl.style.display = 'flex';
+    }
   }
 }
 
@@ -297,19 +470,43 @@ async function loadStructure(id, source) {
     let format = 'pdb';
 
     if (source === 'alphafold') {
-      // Try AlphaFold v4 PDB, then v3, then CIF
-      const urls = [
-        `https://alphafold.ebi.ac.uk/files/AF-${id}-F1-model_v4.pdb`,
-        `https://alphafold.ebi.ac.uk/files/AF-${id}-F1-model_v3.pdb`,
-        `https://alphafold.ebi.ac.uk/files/AF-${id}-F1-model_v4.cif`,
-      ];
-      for (const url of urls) {
-        try {
-          pdbData = await fetchWithTimeout(url, 15000);
-          if (url.endsWith('.cif')) format = 'mmcif';
-          break;
-        } catch (e) {
-          continue;
+      const isUniProt = /^[A-NR-Z][0-9][A-Z0-9]{3}[0-9]|^[O,P,Q][0-9][A-Z0-9]{3}[0-9]/i.test(id);
+      if (!isUniProt) {
+        throw new Error(`AlphaFold DB requires a UniProt Accession. "${id}" does not look like a valid UniProt ID.`);
+      }
+
+      try {
+        // Step 1: Query AlphaFold API to get the correct URL (handles v4, v5, v6 etc.)
+        const apiResp = await fetchWithTimeout(`https://alphafold.ebi.ac.uk/api/prediction/${id}`, 10000);
+        const apiData = JSON.parse(apiResp);
+        if (apiData && apiData.length > 0) {
+          const modelUrl = apiData[0].pdbUrl || apiData[0].cifUrl;
+          if (modelUrl) {
+            pdbData = await fetchWithTimeout(modelUrl, 15000);
+            if (modelUrl.endsWith('.cif')) format = 'mmcif';
+          }
+        }
+      } catch (e) {
+        console.warn('AlphaFold API query failed, falling back to direct URLs', e);
+      }
+
+      // Step 2: Fallback if API fails or parsing fails
+      if (!pdbData) {
+        // Try AlphaFold v6, then v5, then v4 PDB, etc...
+        const urls = [
+          `https://alphafold.ebi.ac.uk/files/AF-${id}-F1-model_v4.pdb`,
+          `https://alphafold.ebi.ac.uk/files/AF-${id}-F1-model_v6.pdb`,
+          `https://alphafold.ebi.ac.uk/files/AF-${id}-F1-model_v6.cif`,
+          `https://alphafold.ebi.ac.uk/files/AF-${id}-F1-model_v4.cif`,
+        ];
+        for (const url of urls) {
+          try {
+            pdbData = await fetchWithTimeout(url, 15000);
+            if (url.endsWith('.cif')) format = 'mmcif';
+            break;
+          } catch (e) {
+            continue;
+          }
         }
       }
       if (!pdbData) {
@@ -339,11 +536,14 @@ async function loadStructure(id, source) {
     hasSurface = false;
 
     currentViewer = $3Dmol.createViewer(container, {
-      backgroundColor: '0x0a0a0a',
+      backgroundColor: '0x0d0d12',
       antialias: true,
+      quality: 'high',
+      light: { directional: true, color: 0xffffff, intensity: 1.2 }
     });
 
     currentViewer.addModel(pdbData, format);
+    currentPdbData = pdbData; // Save current data for AI prediction
 
     const styleSelect = document.getElementById('mol-style');
     const colorSelect = document.getElementById('mol-color');
@@ -353,6 +553,16 @@ async function loadStructure(id, source) {
     currentViewer.render();
 
     if (loadingEl) loadingEl.style.display = 'none';
+
+    // Show AI prediction section
+    const aiSection = document.getElementById('ai-predict-section');
+    if (aiSection) aiSection.style.display = 'block';
+    const ggnnResults = document.getElementById('ggnn-results');
+    if (ggnnResults) {
+      ggnnResults.style.display = 'none';
+      ggnnResults.innerHTML = '';
+    }
+
     showStructureInfo(id, pdbData, source);
 
   } catch (error) {
@@ -391,20 +601,124 @@ async function fetchWithTimeout(url, timeoutMs = 15000) {
   }
 }
 
+// ====== BINDING SITE VISUALIZATION ======
+
+// Map [0,1] confidence level to RRGGBB color (yellow → orange → red)
+function confidenceColor(pct) {
+  // pct: 0 = low confidence (at threshold), 1 = highest confidence
+  if (pct < 0.5) {
+    // yellow (#fbbf24) → orange (#f97316)
+    const t = pct * 2;
+    const r = Math.round(251 + (249 - 251) * t).toString(16).padStart(2, '0');
+    const g = Math.round(191 + (115 - 191) * t).toString(16).padStart(2, '0');
+    const b = Math.round(36 + (22 - 36) * t).toString(16).padStart(2, '0');
+    return `#${r}${g}${b}`;
+  } else {
+    // orange (#f97316) → red (#ef4444)
+    const t = (pct - 0.5) * 2;
+    const r = Math.round(249 + (239 - 249) * t).toString(16).padStart(2, '0');
+    const g = Math.round(115 + (68 - 115) * t).toString(16).padStart(2, '0');
+    const b = Math.round(22 + (68 - 22) * t).toString(16).padStart(2, '0');
+    return `#${r}${g}${b}`;
+  }
+}
+
+// Highlight binding sites on 3D viewer with chosen color mode
+function highlightBindingSites(sites, colorMode, threshold) {
+  if (!currentViewer || !sites || sites.length === 0) return;
+
+  // Base style: white semi-transparent cartoon
+  currentViewer.setStyle({}, { cartoon: { color: 'white', opacity: 0.82, arrows: true, thickness: 0.3 } });
+
+  // Build a list of resi numbers per chain
+  // 3Dmol chain selector: if chain is space/empty treat as wildcard
+  const sitesByChain = {};
+  sites.forEach(site => {
+    const ch = (site.chain || '').trim() || '*';
+    if (!sitesByChain[ch]) sitesByChain[ch] = [];
+    sitesByChain[ch].push({ resi: parseInt(site.resi), prob: site.probability ?? site.score ?? 1.0 });
+  });
+
+  if (colorMode === 'flat') {
+    // Batch select all resi in one shot per chain — much faster
+    Object.entries(sitesByChain).forEach(([ch, residues]) => {
+      const resiList = residues.map(r => r.resi).join(',');
+      const sel = ch === '*' ? { resi: resiList } : { chain: ch, resi: resiList };
+      currentViewer.setStyle(sel, {
+        cartoon: { color: '#ef4444', opacity: 1.0, arrows: true, thickness: 0.3 },
+        stick: { color: '#ef4444', radius: 0.18 },
+        sphere: { color: '#ef4444', scale: 0.38, opacity: 0.9 }
+      });
+    });
+
+  } else if (colorMode === 'pocket') {
+    const POCKET_COLORS = ['#06b6d4', '#f97316', '#a855f7', '#10b981', '#f59e0b', '#3b82f6', '#ec4899'];
+    // Group consecutive residues into pockets by proximity
+    const sorted = [...sites].sort((a, b) => parseInt(a.resi) - parseInt(b.resi));
+    let pocketIdx = 0;
+    let lastResi = -999;
+    const pocketMap = [];
+    sorted.forEach(site => {
+      if (parseInt(site.resi) - lastResi > 6) pocketIdx++;
+      pocketMap.push({ site, pocket: pocketIdx });
+      lastResi = parseInt(site.resi);
+    });
+    // Apply per-pocket color using batch resi selectors
+    const pocketGroups = {};
+    pocketMap.forEach(({ site, pocket }) => {
+      const ch = (site.chain || '').trim() || '*';
+      const key = `${pocket}-${ch}`;
+      if (!pocketGroups[key]) pocketGroups[key] = { ch, pocket, resis: [] };
+      pocketGroups[key].resis.push(parseInt(site.resi));
+    });
+    Object.values(pocketGroups).forEach(({ ch, pocket, resis }) => {
+      const col = POCKET_COLORS[pocket % POCKET_COLORS.length];
+      const sel = ch === '*' ? { resi: resis.join(',') } : { chain: ch, resi: resis.join(',') };
+      currentViewer.setStyle(sel, {
+        cartoon: { color: col, opacity: 1.0, arrows: true, thickness: 0.3 },
+        stick: { color: col, radius: 0.18 },
+        sphere: { color: col, scale: 0.38, opacity: 0.9 }
+      });
+    });
+
+  } else {
+    // Heatmap mode — must do per-residue bc each has unique color
+    const maxProb = Math.max(...sites.map(s => s.probability ?? s.score ?? 1.0));
+    const minProb = Math.min(...sites.map(s => s.probability ?? s.score ?? threshold));
+    const range = maxProb - minProb || 0.01;
+
+    sites.forEach(site => {
+      const prob = site.probability ?? site.score ?? 1.0;
+      const pct = (prob - minProb) / range;
+      const col = confidenceColor(pct);
+      const ch = (site.chain || '').trim() || '*';
+      const sel = ch === '*' ? { resi: parseInt(site.resi) } : { chain: ch, resi: parseInt(site.resi) };
+      currentViewer.setStyle(sel, {
+        cartoon: { color: col, opacity: 1.0, arrows: true, thickness: 0.3 },
+        stick: { color: col, radius: 0.18 },
+        sphere: { color: col, scale: 0.38, opacity: 0.9 }
+      });
+    });
+  }
+
+  currentViewer.render();
+}
+
 function applyStyle(viewer, styleName, colorScheme) {
   const models = viewer.getModel();
   if (!models) return;
 
   viewer.setStyle({}, {});
   const colorOpts = getColorOptions(colorScheme);
-  const styleOpts = { ...colorOpts };
+  // Add smooth shading for premium look
+  const styleOpts = { ...colorOpts, smooth: true };
 
   switch (styleName) {
     case 'cartoon':
-      viewer.setStyle({}, { cartoon: { ...styleOpts, arrows: true, tubes: true, thickness: 0.2 } });
+      viewer.setStyle({}, { cartoon: { ...styleOpts, arrows: true, tubes: false, thickness: 0.35, ribbontruss: true } });
       break;
     case 'stick':
-      viewer.setStyle({}, { stick: { ...styleOpts, radius: 0.15 } });
+      viewer.setStyle({}, { stick: { ...styleOpts, radius: 0.15, colorscheme: 'Jmol' } });
       break;
     case 'sphere':
       viewer.setStyle({}, { sphere: { ...styleOpts, scale: 0.3 } });

@@ -4,7 +4,9 @@
 
 import './style.css';
 import { SAMPLE_SEQUENCES } from './data/sampleSequences.js';
-import { parseFasta, parseGenBank, detectSequenceType, toFasta, downloadFile, reverseComplement, translate } from './utils/bioUtils.js';
+import { parseFasta, parseGenBank, detectSequenceType, toFasta, downloadFile, reverseComplement, translate, fetchUniProtId } from './utils/bioUtils.js';
+import { initStorage, loadWorkspace, saveWorkspace } from './utils/storage.js';
+import { autoAnnotate } from './utils/autoAnnotate.js';
 
 // Components
 import { renderSequenceViewer, bindSequenceViewerEvents } from './components/SequenceViewer.js';
@@ -35,14 +37,45 @@ const state = {
 };
 
 // ====== INITIALIZATION ======
-function init() {
-  state.sequences = [...SAMPLE_SEQUENCES];
+async function init() {
+  try {
+    const savedState = await loadWorkspace();
+    if (savedState && savedState.sequences && savedState.sequences.length > 0) {
+      state.sequences = savedState.sequences;
+      state.tabs = savedState.tabs || [];
+      state.activeTabId = savedState.activeTabId;
+      state.tabCounter = savedState.tabCounter || 0;
+      state.activeSequenceIdx = savedState.activeSequenceIdx || -1;
+    } else {
+      state.sequences = [...SAMPLE_SEQUENCES];
+    }
+  } catch (err) {
+    console.warn("Failed to load workspace, using default", err);
+    state.sequences = [...SAMPLE_SEQUENCES];
+  }
+
   renderFileTree();
   bindToolNav();
   bindToolbar();
   bindNcbiFetch();
-  renderWelcomeScreen();
+
+  if (state.activeTabId != null) {
+    renderTabs();
+    renderToolPanel();
+  } else {
+    renderWelcomeScreen();
+  }
+
   setStatus('Ready');
+}
+
+// Global debounced save function
+let saveTimeout = null;
+function triggerSave() {
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    saveWorkspace(state).catch(e => console.error("Auto-save failed:", e));
+  }, 1000); // Debounce to prevent slamming IndexedDB
 }
 
 // ====== FILE TREE ======
@@ -105,13 +138,24 @@ function bindNcbiFetch() {
 
   const doFetch = async () => {
     const query = input?.value?.trim();
-    const db = dbSelect?.value || 'nucleotide';
     if (!query) return;
+
+    let db = dbSelect?.value || 'nucleotide';
+    const qUpper = query.toUpperCase();
+
+    // Auto-detect Database based on accession prefix
+    if (/^(NP_|XP_|WP_|YP_|AP_)/.test(qUpper) || /^[A-Z][0-9][A-Z0-9]{3}[0-9]/.test(qUpper) || /^[A-Z]{3}\d{5}/.test(qUpper)) {
+      db = 'protein';
+      if (dbSelect) dbSelect.value = 'protein';
+    } else if (/^(NM_|XM_|NR_|XR_|NG_|NC_)/.test(qUpper)) {
+      db = 'nucleotide';
+      if (dbSelect) dbSelect.value = 'nucleotide';
+    }
 
     if (statusEl) {
       statusEl.style.display = 'block';
       statusEl.style.color = 'var(--text-muted)';
-      statusEl.textContent = `Fetching ${query} from NCBI...`;
+      statusEl.textContent = `Fetching ${query} from NCBI ${db}...`;
     }
     fetchBtn.disabled = true;
     fetchBtn.textContent = '...';
@@ -231,11 +275,29 @@ function addFastaToProject(fastaText, db) {
   };
 
   // For proteins: check if accession looks like UniProt (for AlphaFold)
-  if (type === 'protein' && accession && /^[A-Z][0-9][A-Z0-9]{3}[0-9]$/i.test(accession)) {
-    newSeq.uniprotId = accession;
+  if (type === 'protein') {
+    if (accession && /^[A-Z][0-9][A-Z0-9]{3}[0-9]$/i.test(accession)) {
+      newSeq.uniprotId = accession;
+    } else {
+      // Try to resolve the UniProt ID automatically in background
+      fetchUniProtId(accession || name).then(resolvedUniProt => {
+        if (resolvedUniProt) {
+          newSeq.uniprotId = resolvedUniProt;
+          triggerSave();
+          console.log(`Mapped ${accession} to UniProt: ${resolvedUniProt}`);
+          if (state.sequences[state.activeSequenceIdx] === newSeq) {
+            renderToolPanel(); // Refresh 3D viewer cache if open
+          }
+        }
+      });
+    }
   }
 
+  // Auto-annotate newly injected sequence
+  autoAnnotate(newSeq);
+
   state.sequences.push(newSeq);
+  triggerSave();
   renderFileTree();
   openSequence(state.sequences.length - 1);
   setStatus(`Added ${name} (${seqStr.length} ${type === 'protein' ? 'aa' : 'bp'})${accession ? ' — ' + accession : ''}`);
@@ -301,6 +363,7 @@ function openSequence(idx) {
     existingTab = tab;
   }
   state.activeTabId = existingTab.id;
+  triggerSave(); // Save tab state changes
   renderTabs();
   renderToolPanel();
   setStatus(`Viewing: ${seq.name} (${seq.sequence.length} ${seq.type === 'protein' ? 'aa' : 'bp'})`);
@@ -319,6 +382,7 @@ function handleReverseComplement() {
     description: `Reverse complement of ${seq.name}`,
   };
   state.sequences.push(newSeq);
+  triggerSave();
   renderFileTree();
   openSequence(state.sequences.length - 1);
   setStatus(`Created reverse complement: ${newSeq.name}`);
@@ -343,7 +407,30 @@ function handleFileImport(e) {
         parsed = [{ name: file.name, sequence: clean, type: detectSequenceType(clean), annotations: [], description: '' }];
       }
       if (parsed.length) {
+        parsed.forEach(seq => {
+          autoAnnotate(seq);
+
+          if (seq.type === 'protein') {
+            const uniprotRegex = /([A-NR-Z][0-9][A-Z0-9]{3}[0-9]|[O,P,Q][0-9][A-Z0-9]{3}[0-9])/i;
+            const upMatch = seq.name.match(uniprotRegex) || (seq.description && seq.description.match(uniprotRegex));
+
+            if (upMatch) {
+              seq.uniprotId = upMatch[1];
+            } else {
+              // Try resolving accession (e.g. if name is NP_000537)
+              fetchUniProtId(seq.name).then(resolved => {
+                if (resolved) {
+                  seq.uniprotId = resolved;
+                  triggerSave();
+                  if (state.sequences[state.activeSequenceIdx] === seq) renderToolPanel();
+                }
+              });
+            }
+          }
+        });
+
         state.sequences.push(...parsed);
+        triggerSave();
         renderFileTree();
         openSequence(state.sequences.length - parsed.length);
         setStatus(`Imported ${parsed.length} sequence(s) from ${file.name}`);
@@ -397,6 +484,7 @@ function renderTabs() {
           renderWelcomeScreen();
         }
       }
+      triggerSave();
       renderTabs();
     });
   });
@@ -752,7 +840,10 @@ function showNewSequenceDialog() {
     const seqData = (document.getElementById('new-seq-data')?.value || '').replace(/[^A-Za-z*]/g, '');
     if (!seqData) { setStatus('Please enter a sequence'); return; }
     const type = detectSequenceType(seqData);
-    state.sequences.push({ name, sequence: seqData, type, annotations: [], description: 'User-created sequence' });
+    const newSeq = { name, sequence: seqData, type, annotations: [], description: 'User-created sequence' };
+    autoAnnotate(newSeq);
+    state.sequences.push(newSeq);
+    triggerSave();
     renderFileTree();
     openSequence(state.sequences.length - 1);
     hideModal();
@@ -808,6 +899,7 @@ function showAnnotationDialog(seq) {
     const end = parseInt(document.getElementById('ann-end')?.value || '100');
     if (!seq.annotations) seq.annotations = [];
     seq.annotations.push({ name, type, start, end, direction: strand });
+    triggerSave();
     hideModal();
     renderToolPanel();
     setStatus(`Added annotation: ${name}`);

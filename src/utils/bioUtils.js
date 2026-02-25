@@ -124,20 +124,25 @@ export function findORFs(seq, minLength = 30) {
 // ---- Sequence type detection ----
 
 export function detectSequenceType(seq) {
-    const upper = seq.toUpperCase().replace(/[\s\d\n\r]/g, '');
+    const upper = seq.toUpperCase().replace(/[\s\d\n\r*]/g, '');
     const dnaChars = new Set('ATCGN');
     const rnaChars = new Set('AUCGN');
-    let dnaCount = 0, rnaCount = 0, proteinCount = 0;
+    const proteinExclusive = new Set('DEFHIKLMPQRSVWY'); // Excludes A, C, G, T, U, N
+    let dnaCount = 0, rnaCount = 0, exclusiveProteinCount = 0;
     for (const c of upper) {
         if (dnaChars.has(c)) dnaCount++;
         if (rnaChars.has(c)) rnaCount++;
-        if ('ACDEFGHIKLMNPQRSTVWY'.includes(c)) proteinCount++;
+        if (proteinExclusive.has(c)) exclusiveProteinCount++;
     }
     const total = upper.length;
     if (total === 0) return 'unknown';
+
+    // If it has a clear number of exclusive protein chars, it's a protein
+    if (exclusiveProteinCount / total > 0.05 || exclusiveProteinCount > 5) return 'protein';
+
     if (upper.includes('U') && !upper.includes('T')) return 'rna';
-    if (dnaCount / total > 0.9) return 'dna';
-    if (rnaCount / total > 0.9) return 'rna';
+    if (dnaCount / total > 0.85) return 'dna';
+    if (rnaCount / total > 0.85) return 'rna';
     return 'protein';
 }
 
@@ -275,4 +280,28 @@ export function downloadFile(content, filename, mimeType = 'text/plain') {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+}
+
+// ---- External DB Mapping ----
+
+export async function fetchUniProtId(query) {
+    if (!query) return null;
+    // Strip version number from accession (e.g., NP_000537.1 -> NP_000537)
+    const cleanQuery = query.split('.')[0];
+
+    try {
+        const url = `https://rest.uniprot.org/uniprotkb/search?query=${encodeURIComponent(cleanQuery)}&format=json&fields=accession&size=1`;
+        const res = await fetch(url);
+        if (!res.ok) return null;
+
+        const data = await res.json();
+        if (data.results && data.results.length > 0) {
+            // Find a reviewed (Swiss-Prot) entry if possible, otherwise take the first
+            const reviewed = data.results.find(r => r.entryType === 'UniProtKB reviewed (Swiss-Prot)');
+            return reviewed ? reviewed.primaryAccession : data.results[0].primaryAccession;
+        }
+    } catch (e) {
+        console.warn("Error fetching UniProt ID:", e);
+    }
+    return null;
 }
