@@ -277,7 +277,8 @@ export function bindProteinViewerEvents(seq) {
       formData.append('threshold', threshold.toString());
       formData.append('top_n', topN.toString());
 
-      const res = await fetch('http://localhost:8000/predict', {
+      const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+      const res = await fetch(`${BACKEND}/predict`, {
         method: 'POST',
         body: formData
       });

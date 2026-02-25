@@ -1,0 +1,13 @@
+# Render.com deployment config for GGNN2025 backend
+services:
+  - type: web
+    name: biogenesis-backend
+    env: python
+    plan: free          # free tier: 512MB RAM, spins down after 15min inactivity
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: PORT
+        value: 8000
+    healthCheckPath: /health

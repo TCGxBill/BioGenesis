@@ -16,7 +16,7 @@ from src.models.gcn_geometric import GeometricGNN
 from src.data.preprocessor import ProteinPreprocessor
 from src.data.graph_builder import ProteinGraphBuilder
 
-app = FastAPI(title="BioGenesis - GGNN2025 API")
+app = FastAPI(title="BioGenesis - GGNN2025 API", version="1.0.0")
 
 # Allow CORS for the local Vite dev server
 app.add_middleware(
@@ -42,6 +42,11 @@ print("Model loaded successfully!")
 # Initialize Data Processors
 preprocessor = ProteinPreprocessor(config['data'])
 graph_builder = ProteinGraphBuilder(config['data'])
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Render/Railway/Fly.io"""
+    return {"status": "ok", "model": "GGNN2025", "version": "1.0.0"}
 
 @app.post("/predict")
 async def predict_binding_sites(
@@ -117,5 +122,6 @@ async def predict_binding_sites(
             os.remove(temp_path)
 
 if __name__ == "__main__":
-    print("Starting BioGenesis AI Backend on http://localhost:8000")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    print(f"Starting BioGenesis AI Backend on http://0.0.0.0:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
