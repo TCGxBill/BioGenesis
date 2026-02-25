@@ -31,13 +31,39 @@ print("Loading GGNN2025 Model...")
 with open(os.path.join(base_dir, 'config_optimized.yaml'), 'r') as f:
     config = yaml.safe_load(f)
 
+# Find model weights — check multiple locations:
+# 1. best_model.pth at repo root   (HF Spaces — file lives at root)
+# 2. checkpoints_optimized/        (local dev)
+# 3. Download from HF Hub          (fallback)
+_candidates = [
+    os.path.join(base_dir, 'best_model.pth'),
+    os.path.join(base_dir, 'checkpoints_optimized', 'best_model.pth'),
+]
+checkpoint_path = next((p for p in _candidates if os.path.exists(p)), None)
+
+if checkpoint_path is None:
+    print("Model weights not found locally — downloading from HuggingFace Hub...")
+    checkpoint_path = _candidates[1]  # save to checkpoints_optimized/
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+    try:
+        from huggingface_hub import hf_hub_download
+        hf_hub_download(
+            repo_id="TCGxDreams/GGNN2025",
+            filename="best_model.pth",
+            local_dir=os.path.dirname(checkpoint_path),
+        )
+    except Exception as e:
+        print(f"HF Hub download failed: {e}")
+
+print(f"Loading weights from: {checkpoint_path}")
+
 # Initialize Model
 model = GeometricGNN(config['model'])
-checkpoint_path = os.path.join(base_dir, 'checkpoints_optimized', 'best_model.pth')
 checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 print("Model loaded successfully!")
+
 
 # Initialize Data Processors
 preprocessor = ProteinPreprocessor(config['data'])
